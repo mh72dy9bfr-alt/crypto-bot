@@ -1,0 +1,253 @@
+“””
+بوت تلقرام - إشارات شراء وبيع للعملات الرقمية
+يستخدم مؤشر RSI + Moving Average على Binance
+“””
+
+import requests
+import time
+import json
+from datetime import datetime
+
+# ============================================================
+
+# ⚙️ الإعدادات - غير هذه القيم فقط
+
+# ============================================================
+
+TELEGRAM_TOKEN = “ضع_التوكن_هنا”       # من @BotFather
+TELEGRAM_CHAT_ID = “ضع_الشات_ID_هنا”   # شرح كيف تحصل عليه أدناه
+
+# العملات اللي تبي تراقبها
+
+COINS = [
+“BTCUSDT”,
+“ETHUSDT”,
+“BNBUSDT”,
+“SOLUSDT”,
+“XRPUSDT”,
+“DOGEUSDT”,
+]
+
+# إعدادات المؤشرات
+
+RSI_PERIOD = 14
+RSI_OVERSOLD = 30      # أقل من هذا = إشارة شراء
+RSI_OVERBOUGHT = 70    # أعلى من هذا = إشارة بيع
+MA_SHORT = 9           # متوسط متحرك قصير
+MA_LONG = 21           # متوسط متحرك طويل
+
+# الفترة الزمنية للشموع
+
+INTERVAL = “1h”        # 1h = ساعة، 4h = 4 ساعات، 1d = يوم
+
+# كم دقيقة بين كل فحص
+
+CHECK_EVERY_MINUTES = 15
+
+# ============================================================
+
+def get_klines(symbol, interval=“1h”, limit=50):
+“”“جلب بيانات الشموع من Binance”””
+url = f”https://api.binance.com/api/v3/klines”
+params = {“symbol”: symbol, “interval”: interval, “limit”: limit}
+try:
+response = requests.get(url, params=params, timeout=10)
+data = response.json()
+closes = [float(candle[4]) for candle in data]
+return closes
+except Exception as e:
+print(f”خطأ في جلب بيانات {symbol}: {e}”)
+return None
+
+def calculate_rsi(prices, period=14):
+“”“حساب مؤشر RSI”””
+if len(prices) < period + 1:
+return None
+
+```
+gains = []
+losses = []
+
+for i in range(1, period + 1):
+    diff = prices[i] - prices[i - 1]
+    if diff > 0:
+        gains.append(diff)
+        losses.append(0)
+    else:
+        gains.append(0)
+        losses.append(abs(diff))
+
+avg_gain = sum(gains) / period
+avg_loss = sum(losses) / period
+
+for i in range(period + 1, len(prices)):
+    diff = prices[i] - prices[i - 1]
+    gain = diff if diff > 0 else 0
+    loss = abs(diff) if diff < 0 else 0
+    
+    avg_gain = (avg_gain * (period - 1) + gain) / period
+    avg_loss = (avg_loss * (period - 1) + loss) / period
+
+if avg_loss == 0:
+    return 100
+
+rs = avg_gain / avg_loss
+rsi = 100 - (100 / (1 + rs))
+return round(rsi, 2)
+```
+
+def calculate_ma(prices, period):
+“”“حساب المتوسط المتحرك”””
+if len(prices) < period:
+return None
+return sum(prices[-period:]) / period
+
+def analyze_coin(symbol):
+“”“تحليل عملة واحدة وإرجاع الإشارة”””
+prices = get_klines(symbol, INTERVAL, limit=100)
+if not prices:
+return None
+
+```
+rsi = calculate_rsi(prices, RSI_PERIOD)
+ma_short = calculate_ma(prices, MA_SHORT)
+ma_long = calculate_ma(prices, MA_LONG)
+current_price = prices[-1]
+
+if not rsi or not ma_short or not ma_long:
+    return None
+
+signal = None
+reasons = []
+
+# إشارة شراء
+if rsi < RSI_OVERSOLD:
+    reasons.append(f"RSI منخفض ({rsi}) - السوق مبالغ في البيع")
+if ma_short > ma_long and prices[-2] <= calculate_ma(prices[:-1], MA_LONG):
+    reasons.append(f"تقاطع MA صعودي")
+
+if len(reasons) >= 1 and rsi < RSI_OVERSOLD:
+    signal = "شراء"
+
+# إشارة بيع
+sell_reasons = []
+if rsi > RSI_OVERBOUGHT:
+    sell_reasons.append(f"RSI مرتفع ({rsi}) - السوق مبالغ في الشراء")
+if ma_short < ma_long:
+    sell_reasons.append(f"تقاطع MA هبوطي")
+
+if rsi > RSI_OVERBOUGHT:
+    signal = "بيع"
+    reasons = sell_reasons
+
+return {
+    "symbol": symbol,
+    "price": current_price,
+    "rsi": rsi,
+    "ma_short": round(ma_short, 4),
+    "ma_long": round(ma_long, 4),
+    "signal": signal,
+    "reasons": reasons,
+}
+```
+
+def format_message(data):
+“”“تنسيق رسالة التلقرام”””
+if data[“signal”] == “شراء”:
+emoji = “🟢”
+action = “إشارة شراء”
+else:
+emoji = “🔴”
+action = “إشارة بيع”
+
+```
+reasons_text = "\n".join([f"  • {r}" for r in data["reasons"]])
+
+msg = f"""
+```
+
+{emoji} *{action} - {data[‘symbol’]}*
+
+💰 السعر الحالي: `{data['price']}`
+📊 RSI: `{data['rsi']}`
+📈 MA{MA_SHORT}: `{data['ma_short']}`
+📉 MA{MA_LONG}: `{data['ma_long']}`
+
+📋 *الأسباب:*
+{reasons_text}
+
+⏰ {datetime.now().strftime(’%Y-%m-%d %H:%M’)}
+⚠️ هذه إشارة تقنية فقط، ليست نصيحة مالية
+“””
+return msg
+
+def send_telegram(message):
+“”“إرسال رسالة على تلقرام”””
+url = f”https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage”
+data = {
+“chat_id”: TELEGRAM_CHAT_ID,
+“text”: message,
+“parse_mode”: “Markdown”
+}
+try:
+response = requests.post(url, data=data, timeout=10)
+if response.status_code == 200:
+print(f”✅ تم إرسال الرسالة”)
+else:
+print(f”❌ خطأ في الإرسال: {response.text}”)
+except Exception as e:
+print(f”❌ خطأ في الاتصال: {e}”)
+
+def send_startup_message():
+“”“رسالة تأكيد تشغيل البوت”””
+coins_list = “\n”.join([f”  • {c}” for c in COINS])
+msg = f”””
+🤖 *البوت شغال الآن!*
+
+⚙️ الإعدادات:
+• الفترة: {INTERVAL}
+• RSI شراء: أقل من {RSI_OVERSOLD}
+• RSI بيع: أعلى من {RSI_OVERBOUGHT}
+• فحص كل: {CHECK_EVERY_MINUTES} دقيقة
+
+🪙 *العملات المراقبة:*
+{coins_list}
+
+✅ سيصلك تنبيه عند ظهور إشارة
+“””
+send_telegram(msg)
+
+# تتبع الإشارات المرسلة (لتجنب التكرار)
+
+sent_signals = {}
+
+def main():
+print(“🚀 البوت يعمل…”)
+send_startup_message()
+
+```
+while True:
+    print(f"\n🔍 فحص العملات - {datetime.now().strftime('%H:%M:%S')}")
+    
+    for coin in COINS:
+        result = analyze_coin(coin)
+        if not result:
+            continue
+        
+        print(f"  {coin}: RSI={result['rsi']} | إشارة={result['signal'] or 'لا يوجد'}")
+        
+        if result["signal"]:
+            # تجنب إرسال نفس الإشارة مرتين متتاليتين
+            last_signal = sent_signals.get(coin)
+            if last_signal != result["signal"]:
+                msg = format_message(result)
+                send_telegram(msg)
+                sent_signals[coin] = result["signal"]
+                time.sleep(1)  # تأخير بسيط بين الرسائل
+    
+    print(f"⏳ انتظار {CHECK_EVERY_MINUTES} دقيقة...")
+    time.sleep(CHECK_EVERY_MINUTES * 60)
+```
+
+if **TELEGRAM_TOKEN = "التوكن هنا"
+TELEGRAM_CHAT_ID = "الرقم هنا"
